@@ -26,6 +26,8 @@ type MongoConfig struct {
 	URI            string        `yaml:"uri"`
 	ConnectTimeout time.Duration `yaml:"connect_timeout"`
 	RequestTimeout  time.Duration `yaml:"request_timeout"`
+	// WhiteListDB 数据库访问白名单（为空表示不限制；非空时仅允许访问列表内的数据库）
+	WhiteListDB []string `yaml:"white_list_dbs"`
 }
 
 // LogConfig 日志配置

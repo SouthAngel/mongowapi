@@ -59,26 +59,26 @@ func startApp(configPath string) (*app, error) {
 	return &app{srv: srv, mdb: mdb, cfg: cfg, closeLog: closeLog}, nil
 }
 
-// registerRoutes 注册所有 REST 路由
+// registerRoutes 注册所有 REST 路由（统一 POST + 动作端点，参数全部在请求体）
 func registerRoutes(r *gin.Engine, mdb *database.Mongo, cfg *config.Config) {
-	h := handlers.NewHandler(mdb, cfg.Mongo.RequestTimeout)
+	h := handlers.NewHandler(mdb, cfg.Mongo.RequestTimeout, cfg.Mongo.WhiteListDB)
 
 	api := r.Group("/api")
 	{
 		// 文档 CRUD
-		api.GET("/:database/:collection", h.Find)                 // 查询列表
-		api.GET("/:database/:collection/one", h.FindOne)          // 查询单条
-		api.POST("/:database/:collection", h.InsertOne)           // 插入单条
-		api.POST("/:database/:collection/bulk", h.InsertMany)    // 批量插入
-		api.PUT("/:database/:collection", h.UpdateOne)            // 更新单条
-		api.PUT("/:database/:collection/bulk", h.UpdateMany)      // 批量更新
-		api.DELETE("/:database/:collection", h.DeleteOne)        // 删除单条
-		api.DELETE("/:database/:collection/bulk", h.DeleteMany)  // 批量删除
+		api.POST("/insert", h.InsertOne)      // 插入单条
+		api.POST("/insertmany", h.InsertMany) // 批量插入
+		api.POST("/find", h.Find)             // 查询列表
+		api.POST("/findone", h.FindOne)       // 查询单条
+		api.POST("/update", h.UpdateOne)      // 更新单条
+		api.POST("/updatemany", h.UpdateMany) // 批量更新
+		api.POST("/delete", h.DeleteOne)      // 删除单条
+		api.POST("/deletemany", h.DeleteMany) // 批量删除
 
 		// 索引管理
-		api.GET("/:database/:collection/indexes", h.ListIndexes)           // 列出索引
-		api.POST("/:database/:collection/indexes", h.CreateIndex)         // 创建索引
-		api.DELETE("/:database/:collection/indexes/:name", h.DropIndex)   // 删除索引
+		api.POST("/indexes", h.ListIndexes)    // 列出索引
+		api.POST("/createindex", h.CreateIndex) // 创建索引
+		api.POST("/dropindex", h.DropIndex)     // 删除索引
 	}
 
 	// 健康检查

@@ -140,6 +140,7 @@ mongo:
   uri: "mongodb://localhost:27017"
   connect_timeout: 10s
   request_timeout: 30s
+  white_list_dbs: [myapp, myapp2]   # 数据库访问白名单
 ```
 
 | 字段 | 说明 | 默认值 |
@@ -150,10 +151,11 @@ mongo:
 | `mongo.uri` | MongoDB 连接串 | `mongodb://localhost:27017` |
 | `mongo.connect_timeout` | 连接超时 | `10s` |
 | `mongo.request_timeout` | 请求超时 | `30s` |
+| `mongo.white_list_dbs` | 数据库访问白名单，为空表示不限制；非空时仅允许操作列表内的数据库 | 不限制 |
 
 ## API 接口
 
-所有接口前缀为 `/api/:database/:collection`，需在路径中指定数据库名与集合名。
+所有接口统一使用 `POST` 方法，通过不同动作端点区分操作，请求体（JSON）中需包含操作的数据库名 `database` 与集合名 `collection`。
 
 ### 统一响应格式
 
@@ -165,30 +167,39 @@ mongo:
 }
 ```
 
+### 公共参数
+
+每个操作的请求体都需包含：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `database` | string | 数据库名（必填） |
+| `collection` | string | 集合名（必填） |
+
 ### 文档 CRUD
 
-| 方法 | 路径 | 说明 |
+| 方法 | 端点 | 说明 |
 |------|------|------|
-| `GET` | `/api/:db/:coll` | 查询文档列表 |
-| `GET` | `/api/:db/:coll/one` | 查询单条文档 |
-| `POST` | `/api/:db/:coll` | 插入单条文档 |
-| `POST` | `/api/:db/:coll/bulk` | 批量插入文档 |
-| `PUT` | `/api/:db/:coll` | 更新单条文档 |
-| `PUT` | `/api/:db/:coll/bulk` | 批量更新文档 |
-| `DELETE` | `/api/:db/:coll` | 删除单条文档 |
-| `DELETE` | `/api/:db/:coll/bulk` | 批量删除文档 |
+| `POST` | `/api/insert` | 插入单条文档 |
+| `POST` | `/api/insertmany` | 批量插入文档 |
+| `POST` | `/api/find` | 查询文档列表 |
+| `POST` | `/api/findone` | 查询单条文档 |
+| `POST` | `/api/update` | 更新单条文档 |
+| `POST` | `/api/updatemany` | 批量更新文档 |
+| `POST` | `/api/delete` | 删除单条文档 |
+| `POST` | `/api/deletemany` | 批量删除文档 |
 
 ### 索引管理
 
-| 方法 | 路径 | 说明 |
+| 方法 | 端点 | 说明 |
 |------|------|------|
-| `GET` | `/api/:db/:coll/indexes` | 列出所有索引 |
-| `POST` | `/api/:db/:coll/indexes` | 创建索引 |
-| `DELETE` | `/api/:db/:coll/indexes/:name` | 删除指定索引 |
+| `POST` | `/api/indexes` | 列出所有索引 |
+| `POST` | `/api/createindex` | 创建索引 |
+| `POST` | `/api/dropindex` | 删除指定索引 |
 
 ### 健康检查
 
-| 方法 | 路径 | 说明 |
+| 方法 | 端点 | 说明 |
 |------|------|------|
 | `GET` | `/health` | 健康检查 |
 
@@ -196,83 +207,163 @@ mongo:
 
 ### 插入文档
 
-```bash
-curl -X POST http://localhost:8080/api/mydb/users \
-  -H "Content-Type: application/json" \
-  -d '{"document":{"name":"张三","age":30}}'
+```javascript
+const res = await fetch("http://localhost:8080/api/insert", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    database: "mydb",
+    collection: "users",
+    document: { name: "张三", age: 30 },
+  }),
+});
+const data = await res.json();
 ```
 
 ### 批量插入
 
-```bash
-curl -X POST http://localhost:8080/api/mydb/users/bulk \
-  -H "Content-Type: application/json" \
-  -d '{"documents":[{"name":"李四","age":25},{"name":"王五","age":28}]}'
+```javascript
+const res = await fetch("http://localhost:8080/api/insertmany", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    database: "mydb",
+    collection: "users",
+    documents: [
+      { name: "李四", age: 25 },
+      { name: "王五", age: 28 },
+    ],
+  }),
+});
+const data = await res.json();
 ```
 
 ### 查询文档列表
 
-```bash
-# 基础查询（默认 limit=10）
-curl "http://localhost:8080/api/mydb/users"
+```javascript
+// 基础查询（默认 limit=10）
+const res = await fetch("http://localhost:8080/api/find", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ database: "mydb", collection: "users" }),
+});
+const data = await res.json();
 
-# 带过滤、排序、分页
-curl -X GET http://localhost:8080/api/mydb/users \
-  -H "Content-Type: application/json" \
-  -d '{
-    "filter": {"age": {"$gte": 25}},
-    "sort": [{"key": "age", "value": -1}],
-    "skip": 0,
-    "limit": 20
-  }'
+// 带过滤、排序、分页
+const res2 = await fetch("http://localhost:8080/api/find", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    database: "mydb",
+    collection: "users",
+    filter: { age: { $gte: 25 } },
+    sort: [{ key: "age", value: -1 }],
+    skip: 0,
+    limit: 20,
+  }),
+});
+const data2 = await res2.json();
+
+// 仅返回指定字段（projection 投影）
+const res3 = await fetch("http://localhost:8080/api/find", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    database: "mydb",
+    collection: "users",
+    filter: { age: { $gte: 25 } },
+    projection: { name: 1, _id: 0 }, // 1=包含，0=排除
+  }),
+});
+const data3 = await res3.json();
 ```
 
 ### 查询单条
 
-```bash
-curl -X GET http://localhost:8080/api/mydb/users/one \
-  -H "Content-Type: application/json" \
-  -d '{"filter": {"name": "张三"}}'
+```javascript
+const res = await fetch("http://localhost:8080/api/findone", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    database: "mydb",
+    collection: "users",
+    filter: { name: "张三" },
+  }),
+});
+const data = await res.json();
 ```
 
 ### 更新文档
 
-```bash
-curl -X PUT http://localhost:8080/api/mydb/users \
-  -H "Content-Type: application/json" \
-  -d '{
-    "filter": {"name": "张三"},
-    "update": {"$set": {"age": 31}},
-    "upsert": false
-  }'
+```javascript
+const res = await fetch("http://localhost:8080/api/update", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    database: "mydb",
+    collection: "users",
+    filter: { name: "张三" },
+    update: { $set: { age: 31 } },
+    upsert: false,
+  }),
+});
+const data = await res.json();
 ```
 
 ### 删除文档
 
-```bash
-curl -X DELETE http://localhost:8080/api/mydb/users \
-  -H "Content-Type: application/json" \
-  -d '{"filter": {"name": "张三"}}'
+```javascript
+const res = await fetch("http://localhost:8080/api/delete", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    database: "mydb",
+    collection: "users",
+    filter: { name: "张三" },
+  }),
+});
+const data = await res.json();
 ```
 
 ### 创建索引
 
-```bash
-curl -X POST http://localhost:8080/api/mydb/users/indexes \
-  -H "Content-Type: application/json" \
-  -d '{"keys": [{"key": "name", "value": 1}]}'
+```javascript
+const res = await fetch("http://localhost:8080/api/createindex", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    database: "mydb",
+    collection: "users",
+    keys: [{ key: "name", value: 1 }],
+  }),
+});
+const data = await res.json();
 ```
 
 ### 列出索引
 
-```bash
-curl http://localhost:8080/api/mydb/users/indexes
+```javascript
+const res = await fetch("http://localhost:8080/api/indexes", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ database: "mydb", collection: "users" }),
+});
+const data = await res.json();
 ```
 
 ### 删除索引
 
-```bash
-curl -X DELETE http://localhost:8080/api/mydb/users/indexes/name_1
+```javascript
+const res = await fetch("http://localhost:8080/api/dropindex", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    database: "mydb",
+    collection: "users",
+    name: "name_1",
+  }),
+});
+const data = await res.json();
 ```
 
 ## 技术栈

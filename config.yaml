@@ -8,6 +8,7 @@ mongo:
   uri: "mongodb://localhost:27017"   # MongoDB 连接串
   connect_timeout: 10s               # 连接超时
   request_timeout: 30s               # 请求超时
+  white_list_dbs: [myapp, myapp2]   # 数据库访问白名单（留空表示不限制，仅列表内数据库允许被操作）
 
 log:
   filename: "logs/app.log"   # 日志文件路径（留空则仅输出到控制台）

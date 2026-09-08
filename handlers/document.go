@@ -7,22 +7,41 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo/options"
 	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"mongowapi/database"
 	"mongowapi/models"
 )
 
-// Handler 所有 HTTP 处理器的载体，持有 MongoDB 连接与请求超时
+// Handler 所有 HTTP 处理器的载体，持有 MongoDB 连接、请求超时与数据库白名单
 type Handler struct {
-	mongo *database.Mongo
-	timeout time.Duration
+	mongo     *database.Mongo
+	timeout   time.Duration
+	whiteList map[string]struct{} // 允许访问的数据库白名单，为空表示不限制
 }
 
-// NewHandler 创建处理器
-func NewHandler(m *database.Mongo, timeout time.Duration) *Handler {
-	return &Handler{mongo: m, timeout: timeout}
+// NewHandler 创建处理器，whiteList 为允许访问的数据库列表（为空表示不限制）
+func NewHandler(m *database.Mongo, timeout time.Duration, whiteList []string) *Handler {
+	wl := make(map[string]struct{}, len(whiteList))
+	for _, db := range whiteList {
+		if db != "" {
+			wl[db] = struct{}{}
+		}
+	}
+	return &Handler{mongo: m, timeout: timeout, whiteList: wl}
+}
+
+// checkDB 校验数据库是否在白名单内；未配置白名单时始终放行
+func (h *Handler) checkDB(c *gin.Context, db string) bool {
+	if len(h.whiteList) == 0 {
+		return true
+	}
+	if _, ok := h.whiteList[db]; ok {
+		return true
+	}
+	fail(c, http.StatusForbidden, 403, "数据库不在白名单内，禁止访问: "+db)
+	return false
 }
 
 // ctx 返回带超时的上下文
@@ -30,26 +49,17 @@ func (h *Handler) ctx(c *gin.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(c.Request.Context(), h.timeout)
 }
 
-// 从路径参数解析数据库与集合名
-func (h *Handler) params(c *gin.Context) models.DocumentParams {
-	return models.DocumentParams{
-		Database:   c.Param("database"),
-		Collection: c.Param("collection"),
-	}
-}
-
 // InsertOne 插入单条文档
-// POST /api/:database/:collection
+// POST /api/insert
 func (h *Handler) InsertOne(c *gin.Context) {
 	var req models.InsertOneRequest
-	if !bindJSON(c, &req) {
+	if !bindJSON(c, &req) || !h.checkDB(c, req.Database) {
 		return
 	}
-	p := h.params(c)
 	ctx, cancel := h.ctx(c)
 	defer cancel()
 
-	res, err := h.mongo.Collection(p.Database, p.Collection).InsertOne(ctx, req.Document)
+	res, err := h.mongo.Collection(req.Database, req.Collection).InsertOne(ctx, req.Document)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, 500, "插入文档失败: "+err.Error())
 		return
@@ -58,13 +68,12 @@ func (h *Handler) InsertOne(c *gin.Context) {
 }
 
 // InsertMany 批量插入文档
-// POST /api/:database/:collection/bulk
+// POST /api/insertmany
 func (h *Handler) InsertMany(c *gin.Context) {
 	var req models.InsertManyRequest
-	if !bindJSON(c, &req) {
+	if !bindJSON(c, &req) || !h.checkDB(c, req.Database) {
 		return
 	}
-	p := h.params(c)
 	ctx, cancel := h.ctx(c)
 	defer cancel()
 
@@ -72,7 +81,7 @@ func (h *Handler) InsertMany(c *gin.Context) {
 	for i := range req.Documents {
 		docs[i] = req.Documents[i]
 	}
-	res, err := h.mongo.Collection(p.Database, p.Collection).InsertMany(ctx, docs)
+	res, err := h.mongo.Collection(req.Database, req.Collection).InsertMany(ctx, docs)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, 500, "批量插入失败: "+err.Error())
 		return
@@ -81,19 +90,18 @@ func (h *Handler) InsertMany(c *gin.Context) {
 }
 
 // FindOne 查询单条文档
-// GET /api/:database/:collection/one
+// POST /api/findone
 func (h *Handler) FindOne(c *gin.Context) {
 	var req models.FindRequest
-	if !bindJSON(c, &req) {
+	if !bindJSON(c, &req) || !h.checkDB(c, req.Database) {
 		return
 	}
-	p := h.params(c)
 	ctx, cancel := h.ctx(c)
 	defer cancel()
 
 	opts := options.FindOne().SetProjection(req.Projection)
 	var result bson.M
-	err := h.mongo.Collection(p.Database, p.Collection).FindOne(ctx, req.Filter, opts).Decode(&result)
+	err := h.mongo.Collection(req.Database, req.Collection).FindOne(ctx, req.Filter, opts).Decode(&result)
 	if err == mongo.ErrNoDocuments {
 		fail(c, http.StatusNotFound, 404, "未找到文档")
 		return
@@ -106,16 +114,15 @@ func (h *Handler) FindOne(c *gin.Context) {
 }
 
 // Find 查询文档列表（支持分页、排序、投影）
-// GET /api/:database/:collection
+// POST /api/find
 func (h *Handler) Find(c *gin.Context) {
 	var req models.FindRequest
-	if !bindJSON(c, &req) {
+	if !bindJSON(c, &req) || !h.checkDB(c, req.Database) {
 		return
 	}
 	if req.Limit <= 0 || req.Limit > 1000 {
 		req.Limit = 10
 	}
-	p := h.params(c)
 	ctx, cancel := h.ctx(c)
 	defer cancel()
 
@@ -125,7 +132,7 @@ func (h *Handler) Find(c *gin.Context) {
 		SetSkip(req.Skip).
 		SetLimit(req.Limit)
 
-	cur, err := h.mongo.Collection(p.Database, p.Collection).Find(ctx, req.Filter, opts)
+	cur, err := h.mongo.Collection(req.Database, req.Collection).Find(ctx, req.Filter, opts)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, 500, "查询失败: "+err.Error())
 		return
@@ -141,18 +148,17 @@ func (h *Handler) Find(c *gin.Context) {
 }
 
 // UpdateOne 更新单条文档
-// PUT /api/:database/:collection
+// POST /api/update
 func (h *Handler) UpdateOne(c *gin.Context) {
 	var req models.UpdateRequest
-	if !bindJSON(c, &req) {
+	if !bindJSON(c, &req) || !h.checkDB(c, req.Database) {
 		return
 	}
-	p := h.params(c)
 	ctx, cancel := h.ctx(c)
 	defer cancel()
 
 	opts := options.Update().SetUpsert(req.Upsert)
-	res, err := h.mongo.Collection(p.Database, p.Collection).UpdateOne(ctx, req.Filter, req.Update, opts)
+	res, err := h.mongo.Collection(req.Database, req.Collection).UpdateOne(ctx, req.Filter, req.Update, opts)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, 500, "更新失败: "+err.Error())
 		return
@@ -165,18 +171,17 @@ func (h *Handler) UpdateOne(c *gin.Context) {
 }
 
 // UpdateMany 更新多条文档
-// PUT /api/:database/:collection/bulk
+// POST /api/updatemany
 func (h *Handler) UpdateMany(c *gin.Context) {
 	var req models.UpdateRequest
-	if !bindJSON(c, &req) {
+	if !bindJSON(c, &req) || !h.checkDB(c, req.Database) {
 		return
 	}
-	p := h.params(c)
 	ctx, cancel := h.ctx(c)
 	defer cancel()
 
 	opts := options.Update().SetUpsert(req.Upsert)
-	res, err := h.mongo.Collection(p.Database, p.Collection).UpdateMany(ctx, req.Filter, req.Update, opts)
+	res, err := h.mongo.Collection(req.Database, req.Collection).UpdateMany(ctx, req.Filter, req.Update, opts)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, 500, "批量更新失败: "+err.Error())
 		return
@@ -188,19 +193,16 @@ func (h *Handler) UpdateMany(c *gin.Context) {
 }
 
 // DeleteOne 删除单条文档
-// DELETE /api/:database/:collection
+// POST /api/delete
 func (h *Handler) DeleteOne(c *gin.Context) {
-	p := h.params(c)
-	var req struct {
-		Filter bson.M `json:"filter" binding:"required"`
-	}
-	if !bindJSON(c, &req) {
+	var req models.DeleteRequest
+	if !bindJSON(c, &req) || !h.checkDB(c, req.Database) {
 		return
 	}
 	ctx, cancel := h.ctx(c)
 	defer cancel()
 
-	res, err := h.mongo.Collection(p.Database, p.Collection).DeleteOne(ctx, req.Filter)
+	res, err := h.mongo.Collection(req.Database, req.Collection).DeleteOne(ctx, req.Filter)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, 500, "删除失败: "+err.Error())
 		return
@@ -209,19 +211,16 @@ func (h *Handler) DeleteOne(c *gin.Context) {
 }
 
 // DeleteMany 删除多条文档
-// DELETE /api/:database/:collection/bulk
+// POST /api/deletemany
 func (h *Handler) DeleteMany(c *gin.Context) {
-	p := h.params(c)
-	var req struct {
-		Filter bson.M `json:"filter" binding:"required"`
-	}
-	if !bindJSON(c, &req) {
+	var req models.DeleteRequest
+	if !bindJSON(c, &req) || !h.checkDB(c, req.Database) {
 		return
 	}
 	ctx, cancel := h.ctx(c)
 	defer cancel()
 
-	res, err := h.mongo.Collection(p.Database, p.Collection).DeleteMany(ctx, req.Filter)
+	res, err := h.mongo.Collection(req.Database, req.Collection).DeleteMany(ctx, req.Filter)
 	if err != nil {
 		fail(c, http.StatusInternalServerError, 500, "批量删除失败: "+err.Error())
 		return
