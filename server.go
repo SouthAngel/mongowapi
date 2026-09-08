@@ -11,13 +11,15 @@ import (
 	"mongowapi/config"
 	"mongowapi/database"
 	"mongowapi/handlers"
+	"mongowapi/logger"
 )
 
 // app 封装 HTTP 服务与 MongoDB 资源，供前台与服务模式复用
 type app struct {
-	srv *http.Server
-	mdb *database.Mongo
-	cfg *config.Config
+	srv       *http.Server
+	mdb       *database.Mongo
+	cfg       *config.Config
+	closeLog  func() error
 }
 
 // startApp 加载配置、连接 MongoDB 并启动 HTTP 服务（非阻塞）
@@ -26,6 +28,10 @@ func startApp(configPath string) (*app, error) {
 	if err != nil {
 		return nil, fmt.Errorf("加载配置失败: %w", err)
 	}
+
+	// 初始化日志输出（控制台 + 可选文件）
+	closeLog := logger.Setup(&cfg.Log)
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
 	gin.SetMode(cfg.Server.Mode)
 
@@ -50,7 +56,7 @@ func startApp(configPath string) (*app, error) {
 	}()
 	log.Printf("HTTP 服务已启动，监听 %s", srv.Addr)
 
-	return &app{srv: srv, mdb: mdb, cfg: cfg}, nil
+	return &app{srv: srv, mdb: mdb, cfg: cfg, closeLog: closeLog}, nil
 }
 
 // registerRoutes 注册所有 REST 路由
@@ -91,5 +97,8 @@ func (a *app) shutdown() {
 	}
 	if err := a.mdb.Close(ctx); err != nil {
 		log.Printf("关闭 MongoDB 连接失败: %v", err)
+	}
+	if err := a.closeLog(); err != nil {
+		log.Printf("关闭日志文件失败: %v", err)
 	}
 }
