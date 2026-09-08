@@ -49,6 +49,7 @@ jobs:
 
       - name: Build ${{ matrix.name }}
         env:
+          CGO_ENABLED: "0"
           GOARCH: ${{ matrix.goarch }}
         run: go build -ldflags="-s -w" -o mongowapi-${{ matrix.name }}${{ matrix.ext }} .
 
